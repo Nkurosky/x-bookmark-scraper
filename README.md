@@ -24,6 +24,7 @@ python x_bookmark_scraper.py --login
 ```
 
 Log into X in the browser window, then press Enter in the terminal. The session is saved in `.x_browser_profile/`.
+This is separate from your normal Chrome/Edge browser login, so run this at least once before scraping.
 
 ## Scrape bookmarks
 
@@ -32,6 +33,8 @@ python x_bookmark_scraper.py --limit 5
 ```
 
 The scraper only starts from `https://x.com/i/bookmarks`, scans newest to oldest, skips posts already stored in `state/processed_bookmarks.json`, and writes each bookmark to:
+
+If the Playwright profile is not signed in, the scraper prints the current X page, visible page text, and the exact `--login` command to run instead of silently reporting an empty scrape.
 
 ```text
 scraped_bookmarks/

@@ -27,6 +27,17 @@ class TweetSummary:
     text: str
 
 
+@dataclass
+class BookmarkPageDiagnostics:
+    url: str
+    title: str
+    article_count: int
+    has_login_prompt: bool
+    has_empty_message: bool
+    has_error_message: bool
+    visible_text_sample: str
+
+
 def slugify(value: str, max_len: int = 64) -> str:
     value = value.lower()
     value = re.sub(r"https?://\S+", "", value)
@@ -174,6 +185,86 @@ async def find_next_unscraped_bookmarks(
             break
 
     return list(found.values())
+
+
+async def diagnose_bookmarks_page(page: Page) -> BookmarkPageDiagnostics:
+    article_count = await page.locator('article[data-testid="tweet"]').count()
+    body_text = compact_visible_text(await page.locator("body").inner_text(timeout=5_000))
+    lowered = body_text.lower()
+    return BookmarkPageDiagnostics(
+        url=page.url,
+        title=await page.title(),
+        article_count=article_count,
+        has_login_prompt=any(
+            phrase in lowered
+            for phrase in [
+                "sign in to x",
+                "sign in",
+                "log in",
+                "redirect_after_login",
+                "create account",
+                "join x today",
+                "continue with phone",
+                "continue with apple",
+                "email or username",
+                "see what's happening",
+            ]
+        )
+        or "onboarding" in page.url
+        or "redirect_after_login" in page.url,
+        has_empty_message=any(
+            phrase in lowered
+            for phrase in [
+                "save posts for later",
+                "you haven't added any posts to your bookmarks",
+                "you haven’t added any posts to your bookmarks",
+                "when you do, they'll show up here",
+                "when you do, they’ll show up here",
+            ]
+        ),
+        has_error_message=any(
+            phrase in lowered
+            for phrase in [
+                "something went wrong",
+                "try reloading",
+                "rate limit",
+                "temporarily unavailable",
+                "temporarily limited your login",
+            ]
+        ),
+        visible_text_sample=body_text[:500],
+    )
+
+
+def format_bookmarks_diagnostics(diagnostics: BookmarkPageDiagnostics) -> str:
+    flags = []
+    if diagnostics.has_login_prompt:
+        flags.append("login prompt detected")
+    if diagnostics.has_empty_message:
+        flags.append("empty-bookmarks message detected")
+    if diagnostics.has_error_message:
+        flags.append("error/rate-limit text detected")
+    flags_text = ", ".join(flags) if flags else "no obvious login/empty/error text"
+
+    if diagnostics.has_login_prompt:
+        headline = "The Playwright browser profile is not signed into X."
+        next_step = "Run: .\\.venv\\Scripts\\python.exe x_bookmark_scraper.py --login"
+    elif diagnostics.has_error_message:
+        headline = "X showed an error or rate-limit page while loading bookmarks."
+        next_step = "Try again later, or run with --headed to inspect the page."
+    else:
+        headline = "No new unprocessed bookmarks found."
+        next_step = "If this looks wrong, run with --headed and confirm the bookmarks page is visible."
+
+    return (
+        f"{headline}\n"
+        f"- Next step: {next_step}\n"
+        f"- Current page: {diagnostics.url}\n"
+        f"- Title: {diagnostics.title or 'Unknown'}\n"
+        f"- Visible tweet articles: {diagnostics.article_count}\n"
+        f"- Page clues: {flags_text}\n"
+        f"- Visible text sample: {diagnostics.visible_text_sample or '(no visible text)'}"
+    )
 
 
 async def extract_article_data(article: Any, context: BrowserContext, folder: Path, image_prefix: str) -> dict[str, Any]:
@@ -451,7 +542,7 @@ def update_index(output_dir: Path, processed: dict[str, Any]) -> None:
     (output_dir / "bookmarks_index.md").write_text("\n".join(content), encoding="utf-8")
 
 
-async def scrape(args: argparse.Namespace) -> None:
+async def scrape(args: argparse.Namespace) -> int:
     output_dir = Path(args.output)
     state_file = Path(args.state)
     profile_dir = Path(args.profile)
@@ -473,9 +564,12 @@ async def scrape(args: argparse.Namespace) -> None:
         )
 
         if not targets:
-            print("No new unprocessed bookmarks found.")
+            diagnostics = await diagnose_bookmarks_page(page)
+            print(format_bookmarks_diagnostics(diagnostics))
             await context.close()
-            return
+            if diagnostics.has_login_prompt or diagnostics.has_error_message:
+                return 2
+            return 0
 
         run_record = {
             "started_at": datetime.now(timezone.utc).isoformat(),
@@ -496,6 +590,7 @@ async def scrape(args: argparse.Namespace) -> None:
         save_state(state_file, state)
         update_index(output_dir, processed)
         await context.close()
+        return 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -522,7 +617,7 @@ def main() -> None:
     if args.login:
         asyncio.run(login(Path(args.profile), headed=True))
     else:
-        asyncio.run(scrape(args))
+        raise SystemExit(asyncio.run(scrape(args)))
 
 
 if __name__ == "__main__":
