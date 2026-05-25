@@ -1,0 +1,6 @@
+.x_browser_profile/
+.venv/
+scraped_bookmarks/
+state/
+__pycache__/
+*.pyc
