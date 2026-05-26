@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -374,7 +375,12 @@ async def collect_media_labels(article: Any) -> list[str]:
     labels: list[str] = []
     candidates = await article.locator('[aria-label], [alt]').all()
     for candidate in candidates:
-        label = await candidate.get_attribute("aria-label") or await candidate.get_attribute("alt")
+        try:
+            label = await candidate.get_attribute("aria-label", timeout=1_000)
+            if not label:
+                label = await candidate.get_attribute("alt", timeout=1_000)
+        except Exception:
+            continue
         if not label:
             continue
         normalized = label.strip()
@@ -446,31 +452,37 @@ async def scrape_bookmark_detail(
     folder = unique_folder(output_dir, f"{date_part}_{slug}_{summary.post_id}")
 
     folder.mkdir(parents=True, exist_ok=True)
-    main_data = await extract_article_data(main_article, context, folder, "image")
-    thread_articles = await collect_same_author_thread_context(
-        page=page,
-        context=context,
-        folder=folder,
-        author_handle=author_handle,
-        main_post_id=summary.post_id,
-        main_text=main_data["text"],
-        max_scrolls=thread_scrolls,
-    )
+    try:
+        main_data = await extract_article_data(main_article, context, folder, "image")
+        thread_articles = await collect_same_author_thread_context(
+            page=page,
+            context=context,
+            folder=folder,
+            author_handle=author_handle,
+            main_post_id=summary.post_id,
+            main_text=main_data["text"],
+            max_scrolls=thread_scrolls,
+        )
 
-    scrape_md = render_scrape_markdown(summary, main_data, thread_articles)
-    (folder / "scrape.md").write_text(scrape_md, encoding="utf-8")
-    await page.close()
+        scrape_md = render_scrape_markdown(summary, main_data, thread_articles)
+        (folder / "scrape.md").write_text(scrape_md, encoding="utf-8")
 
-    return {
-        "post_id": summary.post_id,
-        "url": summary.url,
-        "folder": str(folder),
-        "scraped_at": datetime.now(timezone.utc).isoformat(),
-        "author_handle": main_data["handle"] or summary.author_handle,
-        "display_name": main_data["display_name"],
-        "timestamp": main_data["timestamp"],
-        "text_preview": (main_data["text"] or summary.text)[:240],
-    }
+        return {
+            "post_id": summary.post_id,
+            "url": summary.url,
+            "folder": str(folder),
+            "scraped_at": datetime.now(timezone.utc).isoformat(),
+            "author_handle": main_data["handle"] or summary.author_handle,
+            "display_name": main_data["display_name"],
+            "timestamp": main_data["timestamp"],
+            "text_preview": (main_data["text"] or summary.text)[:240],
+        }
+    except Exception:
+        if not (folder / "scrape.md").exists():
+            shutil.rmtree(folder, ignore_errors=True)
+        raise
+    finally:
+        await page.close()
 
 
 async def collect_same_author_thread_context(
