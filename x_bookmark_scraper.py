@@ -197,7 +197,11 @@ async def find_next_unscraped_bookmarks(
     max_scrolls: int,
 ) -> list[TweetSummary]:
     await page.goto(BOOKMARKS_URL, wait_until="domcontentloaded")
-    await page.wait_for_timeout(2_000)
+    try:
+        await page.wait_for_selector('article[data-testid="tweet"], input[name="text"], input[name="password"]', timeout=10_000)
+    except Exception:
+        pass
+    await page.wait_for_timeout(1_000)
 
     found: dict[str, TweetSummary] = {}
     previous_height = 0
@@ -212,6 +216,12 @@ async def find_next_unscraped_bookmarks(
 
         await page.mouse.wheel(0, 1600)
         await page.wait_for_timeout(1_500)
+        for summary in await collect_visible_bookmark_summaries(page):
+            if summary.post_id not in processed_ids:
+                found.setdefault(summary.post_id, summary)
+                if len(found) >= limit:
+                    return list(found.values())
+
         height = await page.evaluate("document.body.scrollHeight")
         if height == previous_height:
             unchanged_scrolls += 1
@@ -273,7 +283,11 @@ async def diagnose_bookmarks_page(page: Page) -> BookmarkPageDiagnostics:
     )
 
 
-def format_bookmarks_diagnostics(diagnostics: BookmarkPageDiagnostics, browser_channel: str) -> str:
+def format_bookmarks_diagnostics(
+    diagnostics: BookmarkPageDiagnostics,
+    browser_channel: str,
+    cdp_url: str | None,
+) -> str:
     flags = []
     if diagnostics.has_login_prompt:
         flags.append("login prompt detected")
@@ -285,8 +299,11 @@ def format_bookmarks_diagnostics(diagnostics: BookmarkPageDiagnostics, browser_c
 
     if diagnostics.has_login_prompt:
         headline = "The Playwright browser profile is not signed into X."
-        channel_flag = "" if browser_channel == "chromium" else f" --browser-channel {browser_channel}"
-        next_step = f"Run: .\\.venv\\Scripts\\python.exe x_bookmark_scraper.py --login{channel_flag}"
+        if cdp_url:
+            next_step = f"Log into X in the Chrome window attached at {cdp_url}, then rerun the scrape command."
+        else:
+            channel_flag = "" if browser_channel == "chromium" else f" --browser-channel {browser_channel}"
+            next_step = f"Run: .\\.venv\\Scripts\\python.exe x_bookmark_scraper.py --login{channel_flag}"
     elif diagnostics.has_error_message:
         headline = "X showed an error or rate-limit page while loading bookmarks."
         next_step = "Try again later, or run with --headed to inspect the page."
@@ -606,7 +623,7 @@ async def scrape(args: argparse.Namespace) -> int:
 
         if not targets:
             diagnostics = await diagnose_bookmarks_page(page)
-            print(format_bookmarks_diagnostics(diagnostics, args.browser_channel))
+            print(format_bookmarks_diagnostics(diagnostics, args.browser_channel, args.cdp_url))
             await session.close()
             if diagnostics.has_login_prompt or diagnostics.has_error_message:
                 return 2
