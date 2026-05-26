@@ -4,9 +4,13 @@
 
 ## About
 
-X Bookmark Scraper is a small personal archiving tool for turning X bookmarks into organized Markdown folders that are easy for humans and AI assistants to review. It is built for low-strain, resumable scraping: run a handful of bookmarks at a time, keep images beside each post, preserve thread context, and maintain a clean index for later filtering into high-yield, maybe-useful, or not-worth-it buckets.
+This was a 100% vibe coded project in a coffee shop on memorial day. As someone who uses X to keep up with AI research and other fields, I tended to fall into a trap of bookmarking everything that seems relevant/interesting then only really reading 1 thing a day. This is a trap many people fall into: bookmarks/reading lists grow faster than you read them. This X bookmark scraper is designed to be an archive tool. It checks for new bookmarks and currently unsearched bookmarks, and scraps n amount of posts. It takes the text, images and videos from the post/thread and turns them into organized Markdown folders. It is designed in mind to be ran through a filter, for me this is a /skill built specifically for my research interests so I can filter out posts that seemed relevant but ended up not being, or a post that seemed high yield but really was just AI slop. 
 
-Scrapes your X bookmarks in small resumable batches using a local Playwright browser profile.
+Uses a local Playwright browser profile to access your X bookmarks.
+
+## Disclaimer
+
+Since this project was 100% vibe coded in about 1 hour, I am not planning on updating it or working on optimization. If you run into difficulty with the setup due to X blocking your login, try the debugging tips below (If you are using Claude/Codex you can just ask them to debug this for you as well). 
 
 ## Setup
 
