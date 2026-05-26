@@ -1,4 +1,5 @@
 .x_browser_profile/
+.chrome_cdp_profile/
 .venv/
 scraped_bookmarks/
 state/

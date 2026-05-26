@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from playwright.async_api import BrowserContext, Page, async_playwright
+from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 
 BOOKMARKS_URL = "https://x.com/i/bookmarks"
@@ -37,6 +37,20 @@ class BookmarkPageDiagnostics:
     has_empty_message: bool
     has_error_message: bool
     visible_text_sample: str
+
+
+@dataclass
+class BrowserSession:
+    context: BrowserContext
+    browser: Browser | None = None
+    close_browser: bool = True
+
+    async def close(self) -> None:
+        if self.browser is not None:
+            if self.close_browser:
+                await self.browser.close()
+        else:
+            await self.context.close()
 
 
 def slugify(value: str, max_len: int = 64) -> str:
@@ -79,19 +93,36 @@ def browser_channel_arg(channel: str) -> str | None:
     return None if channel == "chromium" else channel
 
 
-async def login(profile_dir: Path, headed: bool, browser_channel: str) -> None:
+async def open_browser_session(
+    playwright: Any,
+    profile_dir: Path,
+    headed: bool,
+    browser_channel: str,
+    cdp_url: str | None,
+) -> BrowserSession:
+    if cdp_url:
+        browser = await playwright.chromium.connect_over_cdp(cdp_url)
+        context = browser.contexts[0] if browser.contexts else await browser.new_context()
+        return BrowserSession(context=context, browser=browser, close_browser=False)
+
+    context = await playwright.chromium.launch_persistent_context(
+        str(profile_dir),
+        channel=browser_channel_arg(browser_channel),
+        headless=not headed,
+        viewport={"width": 1280, "height": 900},
+    )
+    return BrowserSession(context=context)
+
+
+async def login(profile_dir: Path, headed: bool, browser_channel: str, cdp_url: str | None) -> None:
     async with async_playwright() as p:
-        context = await p.chromium.launch_persistent_context(
-            str(profile_dir),
-            channel=browser_channel_arg(browser_channel),
-            headless=not headed,
-            viewport={"width": 1280, "height": 900},
-        )
+        session = await open_browser_session(p, profile_dir, headed, browser_channel, cdp_url)
+        context = session.context
         page = await context.new_page()
         await page.goto(BOOKMARKS_URL, wait_until="domcontentloaded")
         print("Browser opened. Sign into X if needed, then return here and press Enter.")
         await asyncio.to_thread(input)
-        await context.close()
+        await session.close()
 
 
 async def collect_visible_bookmark_summaries(page: Page) -> list[TweetSummary]:
@@ -557,12 +588,14 @@ async def scrape(args: argparse.Namespace) -> int:
     processed: dict[str, Any] = state.setdefault("processed", {})
 
     async with async_playwright() as p:
-        context = await p.chromium.launch_persistent_context(
-            str(profile_dir),
-            channel=browser_channel_arg(args.browser_channel),
-            headless=not args.headed,
-            viewport={"width": 1280, "height": 900},
+        session = await open_browser_session(
+            p,
+            profile_dir=profile_dir,
+            headed=args.headed,
+            browser_channel=args.browser_channel,
+            cdp_url=args.cdp_url,
         )
+        context = session.context
         page = await context.new_page()
         targets = await find_next_unscraped_bookmarks(
             page,
@@ -574,7 +607,7 @@ async def scrape(args: argparse.Namespace) -> int:
         if not targets:
             diagnostics = await diagnose_bookmarks_page(page)
             print(format_bookmarks_diagnostics(diagnostics, args.browser_channel))
-            await context.close()
+            await session.close()
             if diagnostics.has_login_prompt or diagnostics.has_error_message:
                 return 2
             return 0
@@ -597,7 +630,7 @@ async def scrape(args: argparse.Namespace) -> int:
         run_record["finished_at"] = datetime.now(timezone.utc).isoformat()
         save_state(state_file, state)
         update_index(output_dir, processed)
-        await context.close()
+        await session.close()
         return 0
 
 
@@ -612,6 +645,10 @@ def parse_args() -> argparse.Namespace:
         choices=["chromium", "chrome", "msedge"],
         default=DEFAULT_BROWSER_CHANNEL,
         help="Browser to launch. Use chrome or msedge if X flags bundled Chromium as unusual.",
+    )
+    parser.add_argument(
+        "--cdp-url",
+        help="Attach to a manually launched Chrome/Edge remote debugging URL, such as http://127.0.0.1:9222.",
     )
     parser.add_argument("--max-scrolls", type=int, default=80, help="Maximum bookmark-page scroll attempts per run.")
     parser.add_argument("--thread-scrolls", type=int, default=6, help="Detail-page scrolls for same-author thread context.")
@@ -629,7 +666,14 @@ def main() -> None:
     if args.thread_scrolls < 0:
         raise SystemExit("--thread-scrolls must be 0 or greater.")
     if args.login:
-        asyncio.run(login(Path(args.profile), headed=True, browser_channel=args.browser_channel))
+        asyncio.run(
+            login(
+                Path(args.profile),
+                headed=True,
+                browser_channel=args.browser_channel,
+                cdp_url=args.cdp_url,
+            )
+        )
     else:
         raise SystemExit(asyncio.run(scrape(args)))
 

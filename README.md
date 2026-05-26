@@ -42,6 +42,36 @@ python x_bookmark_scraper.py --limit 5 --browser-channel msedge
 
 Keep using the scraper's `.x_browser_profile/` folder rather than your everyday Chrome profile. It avoids profile-lock problems while still launching through a normal installed browser.
 
+## If X Still Flags The Browser
+
+The next workaround is to launch Chrome yourself with remote debugging, log in manually, and let the scraper attach to that already-open browser.
+
+Close other Chrome windows first, then run:
+
+```powershell
+Start-Process "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" -ArgumentList @(
+  "--remote-debugging-port=9222",
+  "--user-data-dir=$PWD\.chrome_cdp_profile"
+)
+```
+
+If Chrome is installed under Program Files (x86), use:
+
+```powershell
+Start-Process "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe" -ArgumentList @(
+  "--remote-debugging-port=9222",
+  "--user-data-dir=$PWD\.chrome_cdp_profile"
+)
+```
+
+In that Chrome window, log into X and confirm bookmarks load. Then run:
+
+```powershell
+python x_bookmark_scraper.py --limit 5 --cdp-url http://127.0.0.1:9222
+```
+
+This mode attaches to the browser you opened instead of launching a new automation-looking browser. Keep that Chrome window open while scraping.
+
 ## Scrape bookmarks
 
 ```powershell
