@@ -26,6 +26,22 @@ python x_bookmark_scraper.py --login
 Log into X in the browser window, then press Enter in the terminal. The session is saved in `.x_browser_profile/`.
 This is separate from your normal Chrome/Edge browser login, so run this at least once before scraping.
 
+If X or Google flags the default Playwright Chromium browser as unusual, use your installed browser instead:
+
+```powershell
+python x_bookmark_scraper.py --login --browser-channel chrome
+python x_bookmark_scraper.py --limit 5 --browser-channel chrome
+```
+
+If you prefer Microsoft Edge:
+
+```powershell
+python x_bookmark_scraper.py --login --browser-channel msedge
+python x_bookmark_scraper.py --limit 5 --browser-channel msedge
+```
+
+Keep using the scraper's `.x_browser_profile/` folder rather than your everyday Chrome profile. It avoids profile-lock problems while still launching through a normal installed browser.
+
 ## Scrape bookmarks
 
 ```powershell
@@ -52,6 +68,7 @@ It also maintains `scraped_bookmarks/bookmarks_index.md`.
 python x_bookmark_scraper.py --limit 10
 python x_bookmark_scraper.py --headed
 python x_bookmark_scraper.py --thread-scrolls 10
+python x_bookmark_scraper.py --browser-channel chrome
 python x_bookmark_scraper.py --output "C:\path\to\folder"
 ```
 

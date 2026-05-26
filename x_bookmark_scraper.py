@@ -17,6 +17,7 @@ BOOKMARKS_URL = "https://x.com/i/bookmarks"
 DEFAULT_OUTPUT_DIR = Path("scraped_bookmarks")
 DEFAULT_STATE_FILE = Path("state") / "processed_bookmarks.json"
 DEFAULT_PROFILE_DIR = Path(".x_browser_profile")
+DEFAULT_BROWSER_CHANNEL = "chromium"
 
 
 @dataclass
@@ -74,10 +75,15 @@ def markdown_escape(text: str) -> str:
     return text.replace("\r\n", "\n").strip()
 
 
-async def login(profile_dir: Path, headed: bool) -> None:
+def browser_channel_arg(channel: str) -> str | None:
+    return None if channel == "chromium" else channel
+
+
+async def login(profile_dir: Path, headed: bool, browser_channel: str) -> None:
     async with async_playwright() as p:
         context = await p.chromium.launch_persistent_context(
             str(profile_dir),
+            channel=browser_channel_arg(browser_channel),
             headless=not headed,
             viewport={"width": 1280, "height": 900},
         )
@@ -236,7 +242,7 @@ async def diagnose_bookmarks_page(page: Page) -> BookmarkPageDiagnostics:
     )
 
 
-def format_bookmarks_diagnostics(diagnostics: BookmarkPageDiagnostics) -> str:
+def format_bookmarks_diagnostics(diagnostics: BookmarkPageDiagnostics, browser_channel: str) -> str:
     flags = []
     if diagnostics.has_login_prompt:
         flags.append("login prompt detected")
@@ -248,7 +254,8 @@ def format_bookmarks_diagnostics(diagnostics: BookmarkPageDiagnostics) -> str:
 
     if diagnostics.has_login_prompt:
         headline = "The Playwright browser profile is not signed into X."
-        next_step = "Run: .\\.venv\\Scripts\\python.exe x_bookmark_scraper.py --login"
+        channel_flag = "" if browser_channel == "chromium" else f" --browser-channel {browser_channel}"
+        next_step = f"Run: .\\.venv\\Scripts\\python.exe x_bookmark_scraper.py --login{channel_flag}"
     elif diagnostics.has_error_message:
         headline = "X showed an error or rate-limit page while loading bookmarks."
         next_step = "Try again later, or run with --headed to inspect the page."
@@ -552,6 +559,7 @@ async def scrape(args: argparse.Namespace) -> int:
     async with async_playwright() as p:
         context = await p.chromium.launch_persistent_context(
             str(profile_dir),
+            channel=browser_channel_arg(args.browser_channel),
             headless=not args.headed,
             viewport={"width": 1280, "height": 900},
         )
@@ -565,7 +573,7 @@ async def scrape(args: argparse.Namespace) -> int:
 
         if not targets:
             diagnostics = await diagnose_bookmarks_page(page)
-            print(format_bookmarks_diagnostics(diagnostics))
+            print(format_bookmarks_diagnostics(diagnostics, args.browser_channel))
             await context.close()
             if diagnostics.has_login_prompt or diagnostics.has_error_message:
                 return 2
@@ -599,6 +607,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_DIR), help="Output folder for scraped bookmarks.")
     parser.add_argument("--state", default=str(DEFAULT_STATE_FILE), help="JSON state file tracking processed posts.")
     parser.add_argument("--profile", default=str(DEFAULT_PROFILE_DIR), help="Persistent Playwright browser profile folder.")
+    parser.add_argument(
+        "--browser-channel",
+        choices=["chromium", "chrome", "msedge"],
+        default=DEFAULT_BROWSER_CHANNEL,
+        help="Browser to launch. Use chrome or msedge if X flags bundled Chromium as unusual.",
+    )
     parser.add_argument("--max-scrolls", type=int, default=80, help="Maximum bookmark-page scroll attempts per run.")
     parser.add_argument("--thread-scrolls", type=int, default=6, help="Detail-page scrolls for same-author thread context.")
     parser.add_argument("--headed", action="store_true", help="Show the browser while scraping.")
@@ -615,7 +629,7 @@ def main() -> None:
     if args.thread_scrolls < 0:
         raise SystemExit("--thread-scrolls must be 0 or greater.")
     if args.login:
-        asyncio.run(login(Path(args.profile), headed=True))
+        asyncio.run(login(Path(args.profile), headed=True, browser_channel=args.browser_channel))
     else:
         raise SystemExit(asyncio.run(scrape(args)))
 
