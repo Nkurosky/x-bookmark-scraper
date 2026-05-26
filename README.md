@@ -4,9 +4,9 @@
 
 ## About
 
-This was a 100% vibe coded project in a coffee shop on memorial day. As someone who uses X to keep up with AI research and other fields, I tended to fall into a trap of bookmarking everything that seems relevant/interesting then only really reading 1 thing a day. This is a trap many people fall into: bookmarks/reading lists grow faster than you read them. This X bookmark scraper is designed to be an archive tool. It checks for new bookmarks and currently unsearched bookmarks, and scraps n amount of posts. It takes the text, images and videos from the post/thread and turns them into organized Markdown folders. It is designed in mind to be ran through a filter, for me this is a /skill built specifically for my research interests so I can filter out posts that seemed relevant but ended up not being, or a post that seemed high yield but really was just AI slop. 
+This was a 100% vibe coded project in a coffee shop on memorial day. As someone who uses X to keep up with AI research and other fields, I tend to fall into a trap of bookmarking everything that seems relevant/interesting with the intent of going back and reading them, then realizing this would take hours. This tools aim is to make this process less taxing and make archiving easier. It scans your bookmarks from newest to oldest and skips all posts already archived. It scraps n amount of posts (default = 5), takes the text, images and videos from the post/thread and turns them into organized Markdown folders. This tool is designed in mind to be ran through a filter, for me this is a /skill built specifically for my research interests so I can filter out posts that seemed relevant but ended up not being, or a post that seemed high yield but really was just AI slop. 
 
-Uses a local Playwright browser profile to access your X bookmarks.
+This tool uses a local Playwright browser profile to access your X bookmarks.
 
 ## Disclaimer
 
