@@ -94,6 +94,11 @@ def browser_channel_arg(channel: str) -> str | None:
     return None if channel == "chromium" else channel
 
 
+def is_browser_closed_error(exc: Exception) -> bool:
+    message = str(exc)
+    return type(exc).__name__ == "TargetClosedError" or "Target page, context or browser has been closed" in message
+
+
 async def open_browser_session(
     playwright: Any,
     profile_dir: Path,
@@ -645,16 +650,56 @@ async def scrape(args: argparse.Namespace) -> int:
             "started_at": datetime.now(timezone.utc).isoformat(),
             "limit": args.limit,
             "post_ids": [],
+            "failed_post_ids": [],
         }
         state.setdefault("runs", []).append(run_record)
 
         for summary in targets:
             print(f"Scraping {summary.url}")
-            item = await scrape_bookmark_detail(context, summary, output_dir, args.thread_scrolls)
-            processed[summary.post_id] = item
-            run_record["post_ids"].append(summary.post_id)
-            save_state(state_file, state)
-            update_index(output_dir, processed)
+            retry_count = 0
+            try:
+                while True:
+                    try:
+                        item = await scrape_bookmark_detail(context, summary, output_dir, args.thread_scrolls)
+                        processed[summary.post_id] = item
+                        run_record["post_ids"].append(summary.post_id)
+                        save_state(state_file, state)
+                        update_index(output_dir, processed)
+                        break
+                    except Exception as exc:
+                        if not is_browser_closed_error(exc):
+                            raise
+                        if not args.cdp_url or retry_count >= args.browser_retries:
+                            run_record["aborted_at"] = datetime.now(timezone.utc).isoformat()
+                            run_record["abort_reason"] = f"{type(exc).__name__}: {str(exc)[:1_000]}"
+                            save_state(state_file, state)
+                            print(f"Browser connection closed; aborting run: {run_record['abort_reason']}")
+                            return 3
+
+                        retry_count += 1
+                        print(f"Browser connection closed; reconnecting and retrying {summary.url}")
+                        session = await open_browser_session(
+                            p,
+                            profile_dir=profile_dir,
+                            headed=args.headed,
+                            browser_channel=args.browser_channel,
+                            cdp_url=args.cdp_url,
+                        )
+                        context = session.context
+            except Exception as exc:
+                failure = {
+                    "post_id": summary.post_id,
+                    "url": summary.url,
+                    "failed_at": datetime.now(timezone.utc).isoformat(),
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:1_000],
+                }
+                print(f"Failed {summary.url}: {failure['error_type']}: {failure['error']}")
+                state.setdefault("failures", {}).setdefault(summary.post_id, []).append(failure)
+                run_record["failed_post_ids"].append(summary.post_id)
+                save_state(state_file, state)
+                if args.stop_on_error:
+                    raise
 
         run_record["finished_at"] = datetime.now(timezone.utc).isoformat()
         save_state(state_file, state)
@@ -683,6 +728,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--thread-scrolls", type=int, default=6, help="Detail-page scrolls for same-author thread context.")
     parser.add_argument("--headed", action="store_true", help="Show the browser while scraping.")
     parser.add_argument("--login", action="store_true", help="Open browser profile for manual X login, then exit.")
+    parser.add_argument("--stop-on-error", action="store_true", help="Stop the whole run if one bookmark fails.")
+    parser.add_argument("--browser-retries", type=int, default=2, help="Reconnect attempts after the attached browser context closes.")
     return parser.parse_args()
 
 
