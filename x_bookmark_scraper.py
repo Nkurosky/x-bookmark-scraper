@@ -30,6 +30,15 @@ class TweetSummary:
 
 
 @dataclass
+class BookmarkScanResult:
+    targets: list[TweetSummary]
+    exhausted: bool
+    reached_limit: bool
+    hit_max_scrolls: bool
+    scrolls: int
+
+
+@dataclass
 class BookmarkPageDiagnostics:
     url: str
     title: str
@@ -107,7 +116,7 @@ async def open_browser_session(
     cdp_url: str | None,
 ) -> BrowserSession:
     if cdp_url:
-        browser = await playwright.chromium.connect_over_cdp(cdp_url)
+        browser = await playwright.chromium.connect_over_cdp(cdp_url, timeout=30_000)
         context = browser.contexts[0] if browser.contexts else await browser.new_context()
         return BrowserSession(context=context, browser=browser, close_browser=False)
 
@@ -201,7 +210,7 @@ async def find_next_unscraped_bookmarks(
     processed_ids: set[str],
     limit: int,
     max_scrolls: int,
-) -> list[TweetSummary]:
+) -> BookmarkScanResult:
     await page.goto(BOOKMARKS_URL, wait_until="domcontentloaded")
     try:
         await page.wait_for_selector('article[data-testid="tweet"], input[name="text"], input[name="password"]', timeout=10_000)
@@ -212,21 +221,35 @@ async def find_next_unscraped_bookmarks(
     found: dict[str, TweetSummary] = {}
     previous_height = 0
     unchanged_scrolls = 0
+    scrolls = 0
 
     for _ in range(max_scrolls):
         for summary in await collect_visible_bookmark_summaries(page):
             if summary.post_id not in processed_ids:
                 found.setdefault(summary.post_id, summary)
                 if len(found) >= limit:
-                    return list(found.values())
+                    return BookmarkScanResult(
+                        targets=list(found.values()),
+                        exhausted=False,
+                        reached_limit=True,
+                        hit_max_scrolls=False,
+                        scrolls=scrolls,
+                    )
 
         await page.mouse.wheel(0, 1600)
         await page.wait_for_timeout(1_500)
+        scrolls += 1
         for summary in await collect_visible_bookmark_summaries(page):
             if summary.post_id not in processed_ids:
                 found.setdefault(summary.post_id, summary)
                 if len(found) >= limit:
-                    return list(found.values())
+                    return BookmarkScanResult(
+                        targets=list(found.values()),
+                        exhausted=False,
+                        reached_limit=True,
+                        hit_max_scrolls=False,
+                        scrolls=scrolls,
+                    )
 
         height = await page.evaluate("document.body.scrollHeight")
         if height == previous_height:
@@ -235,9 +258,21 @@ async def find_next_unscraped_bookmarks(
             unchanged_scrolls = 0
             previous_height = height
         if unchanged_scrolls >= 4:
-            break
+            return BookmarkScanResult(
+                targets=list(found.values()),
+                exhausted=True,
+                reached_limit=False,
+                hit_max_scrolls=False,
+                scrolls=scrolls,
+            )
 
-    return list(found.values())
+    return BookmarkScanResult(
+        targets=list(found.values()),
+        exhausted=False,
+        reached_limit=False,
+        hit_max_scrolls=True,
+        scrolls=scrolls,
+    )
 
 
 async def diagnose_bookmarks_page(page: Page) -> BookmarkPageDiagnostics:
@@ -622,25 +657,45 @@ async def scrape(args: argparse.Namespace) -> int:
     processed: dict[str, Any] = state.setdefault("processed", {})
 
     async with async_playwright() as p:
-        session = await open_browser_session(
-            p,
-            profile_dir=profile_dir,
-            headed=args.headed,
-            browser_channel=args.browser_channel,
-            cdp_url=args.cdp_url,
-        )
+        try:
+            session = await open_browser_session(
+                p,
+                profile_dir=profile_dir,
+                headed=args.headed,
+                browser_channel=args.browser_channel,
+                cdp_url=args.cdp_url,
+            )
+        except Exception as exc:
+            if args.cdp_url:
+                print(
+                    "Could not attach to the CDP browser. "
+                    "Make sure the Chrome window launched with --remote-debugging-port is still responsive, "
+                    "or restart it and try again.\n"
+                    f"- CDP URL: {args.cdp_url}\n"
+                    f"- Error: {type(exc).__name__}: {str(exc)[:1_000]}"
+                )
+                return 2
+            raise
         context = session.context
         page = await context.new_page()
-        targets = await find_next_unscraped_bookmarks(
+        scan_limit = args.limit
+        if args.until_exhausted:
+            scan_limit = max(args.limit, 1_000_000)
+
+        scan_result = await find_next_unscraped_bookmarks(
             page,
             processed_ids=set(processed),
-            limit=args.limit,
+            limit=scan_limit,
             max_scrolls=args.max_scrolls,
         )
+        targets = scan_result.targets
 
         if not targets:
             diagnostics = await diagnose_bookmarks_page(page)
-            print(format_bookmarks_diagnostics(diagnostics, args.browser_channel, args.cdp_url))
+            if not diagnostics.has_login_prompt and not diagnostics.has_error_message and scan_result.exhausted:
+                print("All caught up: scanned to the apparent end of bookmarks and found no new posts.")
+            else:
+                print(format_bookmarks_diagnostics(diagnostics, args.browser_channel, args.cdp_url))
             await session.close()
             if diagnostics.has_login_prompt or diagnostics.has_error_message:
                 return 2
@@ -649,10 +704,23 @@ async def scrape(args: argparse.Namespace) -> int:
         run_record = {
             "started_at": datetime.now(timezone.utc).isoformat(),
             "limit": args.limit,
+            "until_exhausted": args.until_exhausted,
+            "scan_exhausted": scan_result.exhausted,
+            "scan_reached_limit": scan_result.reached_limit,
+            "scan_hit_max_scrolls": scan_result.hit_max_scrolls,
+            "scan_scrolls": scan_result.scrolls,
+            "candidate_post_ids": [summary.post_id for summary in targets],
             "post_ids": [],
             "failed_post_ids": [],
         }
         state.setdefault("runs", []).append(run_record)
+        print(
+            "Scan found "
+            f"{len(targets)} new candidate bookmarks "
+            f"(exhausted={scan_result.exhausted}, "
+            f"reached_limit={scan_result.reached_limit}, "
+            f"hit_max_scrolls={scan_result.hit_max_scrolls})."
+        )
 
         for summary in targets:
             print(f"Scraping {summary.url}")
@@ -662,6 +730,11 @@ async def scrape(args: argparse.Namespace) -> int:
                     try:
                         item = await scrape_bookmark_detail(context, summary, output_dir, args.thread_scrolls)
                         processed[summary.post_id] = item
+                        failures = state.get("failures")
+                        if failures:
+                            failures.pop(summary.post_id, None)
+                            if not failures:
+                                state.pop("failures", None)
                         run_record["post_ids"].append(summary.post_id)
                         save_state(state_file, state)
                         update_index(output_dir, processed)
@@ -704,6 +777,12 @@ async def scrape(args: argparse.Namespace) -> int:
         run_record["finished_at"] = datetime.now(timezone.utc).isoformat()
         save_state(state_file, state)
         update_index(output_dir, processed)
+        if scan_result.exhausted:
+            print("Bookmark scan appears exhausted: no more new bookmark IDs were found before the page stopped growing.")
+        elif scan_result.reached_limit:
+            print("Stopped because the requested limit was reached. More bookmarks may remain.")
+        elif scan_result.hit_max_scrolls:
+            print("Stopped because --max-scrolls was reached. More bookmarks may remain; increase --max-scrolls to scan deeper.")
         await session.close()
         return 0
 
@@ -730,6 +809,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--login", action="store_true", help="Open browser profile for manual X login, then exit.")
     parser.add_argument("--stop-on-error", action="store_true", help="Stop the whole run if one bookmark fails.")
     parser.add_argument("--browser-retries", type=int, default=2, help="Reconnect attempts after the attached browser context closes.")
+    parser.add_argument(
+        "--until-exhausted",
+        action="store_true",
+        help="Ignore --limit and keep collecting candidates until the bookmark page stops growing or --max-scrolls is reached.",
+    )
     return parser.parse_args()
 
 

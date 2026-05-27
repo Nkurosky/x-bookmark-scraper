@@ -103,7 +103,16 @@ python x_bookmark_scraper.py --limit 10
 python x_bookmark_scraper.py --headed
 python x_bookmark_scraper.py --thread-scrolls 10
 python x_bookmark_scraper.py --browser-channel chrome
+python x_bookmark_scraper.py --until-exhausted --max-scrolls 500 --cdp-url http://127.0.0.1:9222
 python x_bookmark_scraper.py --output "C:\path\to\folder"
 ```
 
 Use a small `--limit` to keep the laptop load low. New bookmarks added later will appear near the top of the bookmarks page and will be picked up before older unsaved backlog items.
+
+For daily catch-up runs, use `--until-exhausted`. The scraper will scan until the bookmarks page appears to stop growing, then print:
+
+```text
+Bookmark scan appears exhausted: no more new bookmark IDs were found before the page stopped growing.
+```
+
+If it says it reached `--limit` or `--max-scrolls`, the run stopped before proving the bookmark list was exhausted.
